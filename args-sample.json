@@ -1,0 +1,40 @@
+{
+  "dcos_master": "http://leader.mesos",
+  "interval": 10,
+  "marathon_apps":[
+    {
+      "id": "/test/stress-cpu",
+      "dcos_tenant": "sae-skyark",
+      "verbose": 0,
+      "trigger_mode": "mem",
+      "autoscale_multiplier": 1.5,
+      "max_instances": 10,
+      "min_instances": 2,
+      "cool_down_factor": 3,
+      "scale_up_factor": 3,
+      "min_range": [
+        20
+      ],
+      "max_range": [
+        80
+      ]
+    },
+    {
+      "id": "/test/stress-memory",
+      "dcos_tenant": "sae-skyark",
+      "verbose": 0,
+      "trigger_mode": "mem",
+      "autoscale_multiplier": 1.5,
+      "max_instances": 10,
+      "min_instances": 2,
+      "cool_down_factor": 3,
+      "scale_up_factor": 3,
+      "min_range": [
+        20
+      ],
+      "max_range": [
+        80
+      ]
+    }
+  ]
+}
