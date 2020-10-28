@@ -7,9 +7,9 @@ FROM python:3-alpine
 # Copy the python scripts into the working directory
 ADD / /marathon-autoscale
 WORKDIR /marathon-autoscale
-
-RUN apk add --update --virtual .build-dependencies openssl-dev libffi-dev make gcc g++
 RUN apk add --update python-dev
+RUN apk add --virtual .build-dependencies openssl-dev libffi-dev make gcc g++
+
 RUN pip install -r requirements.txt
 
 # Start the autoscale application
