@@ -6,6 +6,7 @@ import time
 import math
 import argparse
 import urllib3
+import threading
 
 from autoscaler.agent_stats import AgentStats
 from autoscaler.api_client import APIClient
@@ -17,7 +18,6 @@ from autoscaler.modes.scalecpuandmem import ScaleByCPUAndMemory
 from autoscaler.modes.scalebycpuormem import ScaleByCPUOrMemory
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
 
 class Autoscaler:
     """Marathon autoscaler upon initialization, it reads a list of
@@ -39,26 +39,20 @@ class Autoscaler:
         'or': ScaleByCPUOrMemory
     }
 
-    def __init__(self):
-        """Initialize the object with data from the command line or environment
-        variables. Log in into DCOS if username / password are provided.
-        Set up logging according to the verbosity requested.
-        """
 
+    def __init__(self, dcos_tenant, marathon_app, trigger_mode, autoscale_multiplier, min_instances, max_instances, cool_down_factor
+                 , scale_up_factor, min_range, max_range, interval, verbose, api_client):
         self.scale_up = 0
         self.cool_down = 0
-
-        args = self.parse_arguments()
-
-        self.dcos_master = args.dcos_master
-        self.trigger_mode = args.trigger_mode
-        self.autoscale_multiplier = float(args.autoscale_multiplier)
-        self.min_instances = int(args.min_instances)
-        self.max_instances = int(args.max_instances)
-        self.cool_down_factor = int(args.cool_down_factor)
-        self.scale_up_factor = int(args.scale_up_factor)
-        self.interval = args.interval
-        self.verbose = args.verbose or os.environ.get("AS_VERBOSE")
+        self.trigger_mode = trigger_mode
+        self.autoscale_multiplier = float(autoscale_multiplier)
+        self.min_instances = int(min_instances)
+        self.max_instances = int(max_instances)
+        self.cool_down_factor = int(cool_down_factor)
+        self.scale_up_factor = int(scale_up_factor)
+        self.interval = interval
+        self.verbose = verbose
+        self.MARATHON_APPS_URI = self.MARATHON_APPS_URI.replace('marathon', dcos_tenant)
 
         # Start logging
         if self.verbose:
@@ -71,21 +65,22 @@ class Autoscaler:
             format=self.LOGGING_FORMAT
         )
 
-        self.log = logging.getLogger("autoscale")
+        self.log = logging.getLogger(' '.join([threading.current_thread()._name, __name__]))
 
         # Initialize marathon client for auth requests
-        self.api_client = APIClient(self.dcos_master)
+        self.api_client = api_client
 
         # Initialize agent statistics fetcher and keeper
         self.agent_stats = AgentStats(self.api_client)
 
         # Instantiate the Marathon app class
-        app_name = args.marathon_app
+        app_name = marathon_app
         if not app_name.startswith('/'):
             app_name = '/' + app_name
         self.marathon_app = MarathonApp(
             app_name=app_name,
-            api_client=self.api_client
+            api_client=self.api_client,
+            dcos_tenant=dcos_tenant
         )
 
         # Instantiate the scaling mode class
@@ -93,8 +88,8 @@ class Autoscaler:
             self.log.error("Scale mode is not found.")
             sys.exit(1)
 
-        min = [float(i) for i in args.min_range.split(',')]
-        max = [float(i) for i in args.max_range.split(',')]
+        min = [float(i) for i in min_range]
+        max = [float(i) for i in max_range]
 
         dimension = {"min": min, "max": max}
 
@@ -104,7 +99,6 @@ class Autoscaler:
             app=self.marathon_app,
             dimension=dimension,
         )
-
     def timer(self):
         """Simple timer function"""
         self.log.debug("Successfully completed a cycle, sleeping for %s seconds",
@@ -158,10 +152,13 @@ class Autoscaler:
                 self.log.info("Reached the set maximum of instances %s", self.max_instances)
                 target_instances = self.max_instances
         else:
-            target_instances = math.floor(app_instances / self.autoscale_multiplier)
-            if target_instances < self.min_instances:
-                self.log.info("Reached the set minimum of instances %s", self.min_instances)
-                target_instances = self.min_instances
+            # target_instances = math.floor(app_instances / self.autoscale_multiplier)
+            # if target_instances < self.min_instances:
+            #     self.log.info("Reached the set minimum of instances %s", self.min_instances)
+            #     target_instances = self.min_instances
+            #缩容动作动作不执行，日志告警
+            target_instances = app_instances
+            self.log.error('scale down trigger off')
 
         self.log.debug("scale_app: app_instances %s target_instances %s",
                        app_instances, target_instances)
@@ -171,7 +168,7 @@ class Autoscaler:
             json_data = json.dumps(data)
             response = self.api_client.dcos_rest(
                 "put",
-                '/service/marathon/v2/apps' + self.marathon_app.app_name,
+                self.MARATHON_APPS_URI + self.marathon_app.app_name,
                 data=json_data
             )
             self.log.debug("scale_app response: %s", response)
@@ -277,7 +274,50 @@ class Autoscaler:
             finally:
                 self.timer()
 
+def threadMethod(dcos_tenant, marathon_app, trigger_mode, autoscale_multiplier, min_instances, max_instances, cool_down_factor
+                 , scale_up_factor, min_range, max_range, interval, verbose, api_client):
+    autoScaler = Autoscaler(dcos_tenant,
+                            marathon_app,
+                            trigger_mode,
+                            autoscale_multiplier,
+                            min_instances,
+                            max_instances,
+                            cool_down_factor,
+                            scale_up_factor,
+                            min_range,
+                            max_range,
+                            interval,
+                            verbose,
+                            api_client)
+    autoScaler.run()
 
 if __name__ == "__main__":
-    AutoScaler = Autoscaler()
-    AutoScaler.run()
+    args = os.environ.get('AUTOSCALE_ARGS')
+    jsonArgs = json.loads(args)
+    api_client = APIClient(jsonArgs['dcos_master'])
+    interval = jsonArgs['interval']
+    marathon_apps = jsonArgs['marathon_apps']
+    threads = []
+    for app in marathon_apps:
+        t = threading.Thread(target=threadMethod,args=(
+            app['dcos_tenant'],
+            app['id'],
+            app['trigger_mode'],
+            app['autoscale_multiplier'],
+            app['min_instances'],
+            app['max_instances'],
+            app['cool_down_factor'],
+            app['scale_up_factor'],
+            app['min_range'],
+            app['max_range'],
+            interval,
+            app['verbose'],
+            api_client
+        ) ,name=' '.join([app['dcos_tenant'], app['id']]))
+        t.start()
+        threads.append(t)
+    #清理缓存
+    while True:
+        time.sleep(interval)
+        logging.getLogger(' '.join([threading.current_thread()._name, __name__])).info(' '.join(['current cache_info:', str(api_client.dcos_rest_get.cache_info()), '\n cache cleared']))
+        api_client.dcos_rest_get.cache_clear()

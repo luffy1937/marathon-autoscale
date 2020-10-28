@@ -1,11 +1,11 @@
 import logging
-
+import threading
 
 class AgentStats:
     def __init__(self, api_client):
         self.api_client = api_client
         self.stats = {}
-        self.log = logging.getLogger("autoscale")
+        self.log = logging.getLogger(' '.join([threading.current_thread()._name, __name__]))
 
     def reset(self):
         """ Drop all cached statistics.

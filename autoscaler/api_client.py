@@ -5,6 +5,8 @@ import jwt
 import sys
 import logging
 import time
+import threading
+from functools import lru_cache
 
 
 class APIClient:
@@ -18,7 +20,7 @@ class APIClient:
             'Content-type': 'application/json'
         }
         self.authenticate()
-        self.log = logging.getLogger("autoscale")
+        self.log = logging.getLogger(' '.join([threading.current_thread()._name, __name__]))
 
     def authenticate(self):
         """Using a userid/pass or a service account secret,
@@ -88,6 +90,60 @@ class APIClient:
         })
 
     def dcos_rest(self, method, path, data=None, auth=True):
+        """Common querying procedure that handles 401 errors
+        Args:
+            method (str): HTTP method (get or put)
+            path (str): URI path after the mesos master address
+        Returns:
+            JSON requests.response.content result of the query
+        """
+
+        #如果是method是“GET"，则通过带缓存的dcos_rest_get方法访问
+        if method.lower().__eq__('get'):
+            return self.dcos_rest_get(method, path, data=data, auth=auth)
+
+        try:
+            if data is None:
+                response = requests.request(
+                    method,
+                    self.dcos_master + path,
+                    headers=self.dcos_headers,
+                    verify=False
+                )
+            else:
+                response = requests.request(
+                    method,
+                    self.dcos_master + path,
+                    headers=self.dcos_headers,
+                    data=data,
+                    verify=False
+                )
+
+            self.log.debug("%s %s %s", method, path, response.status_code)
+
+            if response.status_code != 200:
+                if response.status_code == 401 and auth:
+                    self.log.info("Token expired. Re-authenticating to DC/OS")
+                    self.authenticate()
+                    return self.dcos_rest(method, path, data=data, auth=False)
+                else:
+                    response.raise_for_status()
+
+            content = response.content.strip()
+            if not content:
+                content = "{}"
+
+            result = json.loads(content)
+            return result
+
+        except requests.exceptions.HTTPError as e:
+            self.log.error("HTTP Error: %s", e)
+            raise
+        except Exception as e:
+            self.log.error("Error: %s", e)
+            raise
+    @lru_cache(maxsize=None)
+    def dcos_rest_get(self, method, path, data=None, auth=True):
         """Common querying procedure that handles 401 errors
         Args:
             method (str): HTTP method (get or put)

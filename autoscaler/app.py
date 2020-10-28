@@ -1,17 +1,23 @@
 import requests
 import sys
 import logging
-
+import threading
 
 class MarathonApp:
 
     MARATHON_APPS_URI = '/service/marathon/v2/apps'
 
-    def __init__(self, app_name, api_client):
+    def __init__(self, app_name, api_client, dcos_tenant):
+        '''
+        支持多租户
+        :param app_name:
+        :param api_client:
+        :param dcos_tenant: 租户
+        '''
         self.app_name = app_name
         self.api_client = api_client
-        self.log = logging.getLogger("autoscale")
-
+        self.log = logging.getLogger(' '.join([threading.current_thread()._name, __name__]))
+        self.MARATHON_APPS_URI = self.MARATHON_APPS_URI.replace('marathon', dcos_tenant)
     def app_exists(self):
         """Determines if the application exists in Marathon
         """
