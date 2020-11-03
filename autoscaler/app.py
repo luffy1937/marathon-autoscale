@@ -16,7 +16,7 @@ class MarathonApp:
         '''
         self.app_name = app_name
         self.api_client = api_client
-        self.log = logging.getLogger(' '.join([threading.current_thread()._name, __name__]))
+        self.log = logging.getLogger('autoscale')
         self.MARATHON_APPS_URI = self.MARATHON_APPS_URI.replace('marathon', dcos_tenant)
     def app_exists(self):
         """Determines if the application exists in Marathon

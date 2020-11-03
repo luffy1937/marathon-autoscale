@@ -20,7 +20,7 @@ class APIClient:
             'Content-type': 'application/json'
         }
         self.authenticate()
-        self.log = logging.getLogger(' '.join([threading.current_thread()._name, __name__]))
+        self.log = logging.getLogger('autoscale')
 
     def authenticate(self):
         """Using a userid/pass or a service account secret,

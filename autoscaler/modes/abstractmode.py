@@ -26,7 +26,7 @@ class AbstractMode(ABC):
             else:
                 self.max_range = dimension["max"]
 
-        self.log = logging.getLogger(' '.join([threading.current_thread()._name, __name__]))
+        self.log = logging.getLogger('autoscale')
 
     @abstractmethod
     def scale_direction(self, value):
