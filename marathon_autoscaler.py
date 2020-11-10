@@ -7,7 +7,7 @@ import math
 import urllib3
 import threading
 import requests
-
+import socket
 from autoscaler.agent_stats import AgentStats
 from autoscaler.api_client import APIClient
 from autoscaler.app import MarathonApp
@@ -16,6 +16,7 @@ from autoscaler.modes.scalesqs import ScaleBySQS
 from autoscaler.modes.scalemem import ScaleByMemory
 from autoscaler.modes.scalecpuandmem import ScaleByCPUAndMemory
 from autoscaler.modes.scalebycpuormem import ScaleByCPUOrMemory
+from logging.handlers import RotatingFileHandler
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 LOGGING_FORMAT = '%(asctime)s - %(threadName)s - %(thread)s - %(pathname)s:%(lineno)d - %(levelname)s - %(message)s'
@@ -41,7 +42,7 @@ class Autoscaler:
 
 
     def __init__(self, dcos_tenant, marathon_app, trigger_mode, autoscale_multiplier, min_instances, max_instances, cool_down_factor
-                 , scale_up_factor, min_range, max_range, interval, verbose, api_client):
+                 , scale_up_factor, min_range, max_range, interval, log_level, api_client):
         self.scale_up = 0
         self.cool_down = 0
         self.trigger_mode = trigger_mode
@@ -51,14 +52,14 @@ class Autoscaler:
         self.cool_down_factor = int(cool_down_factor)
         self.scale_up_factor = int(scale_up_factor)
         self.interval = interval
-        self.verbose = verbose
+        self.log_level = log_level
         self.MARATHON_APPS_URI = self.MARATHON_APPS_URI.replace('marathon', dcos_tenant)
         #多线程时的终止条件
         self.active = True
 
         # Start logging
         self.log = logging.getLogger(dcos_tenant + marathon_app)
-        if self.verbose:
+        if self.log_level == 'DEBUG':
             self.log.setLevel(logging.DEBUG)
         else:
             self.log.setLevel(logging.INFO)
@@ -113,7 +114,7 @@ class Autoscaler:
             self.scale_up += 1
             self.cool_down = 0
             if self.scale_up >= self.scale_up_factor:
-                self.log.info("Auto-scale triggered based on %s exceeding threshold" % self.trigger_mode)
+                self.log.warning("Auto-scale triggered based on %s exceeding threshold" % self.trigger_mode)
                 self.scale_app(True)
                 self.scale_up = 0
             else:
@@ -124,7 +125,7 @@ class Autoscaler:
             self.cool_down += 1
             self.scale_up = 0
             if self.cool_down >= self.cool_down_factor:
-                self.log.info("Auto-scale triggered based on %s below the threshold" % self.trigger_mode)
+                self.log.warning("Auto-scale triggered based on %s below the threshold" % self.trigger_mode)
                 self.scale_app(False)
                 self.cool_down = 0
             else:
@@ -147,7 +148,7 @@ class Autoscaler:
         if is_up:
             target_instances = math.ceil(app_instances * self.autoscale_multiplier)
             if target_instances > self.max_instances:
-                self.log.info("Reached the set maximum of instances %s", self.max_instances)
+                self.log.warning("Reached the set maximum of instances %s", self.max_instances)
                 target_instances = self.max_instances
         else:
             # target_instances = math.floor(app_instances / self.autoscale_multiplier)
@@ -156,7 +157,7 @@ class Autoscaler:
             #     target_instances = self.min_instances
             #缩容动作动作不执行，日志告警
             target_instances = app_instances
-            self.log.error('scale down trigger off')
+            self.log.warning('scale down trigger off')
 
         self.log.debug("scale_app: app_instances %s target_instances %s",
                        app_instances, target_instances)
@@ -207,6 +208,14 @@ if __name__ == "__main__":
         format=LOGGING_FORMAT,
         level=logging.INFO
     )
+    rh = RotatingFileHandler('marathon-autoscale-info-' + socket.gethostname() + '.log', maxBytes=1024 * 1024 * 1024, backupCount=10)
+    rh.setLevel(level=logging.INFO)
+    rh.setFormatter(logging.Formatter(LOGGING_FORMAT))
+    rhe = RotatingFileHandler('marathon-autoscale-warn-' + socket.gethostname() + '.log', maxBytes=1024 * 1024 * 1024, backupCount=10)
+    rhe.setLevel(level=logging.WARN)
+    rhe.setFormatter(logging.Formatter(LOGGING_FORMAT))
+    logging.getLogger().addHandler(rh)
+    logging.getLogger().addHandler(rhe)
     log = logging.getLogger('autoscale')
 
     #获取参数,优先通过请求AUTOSCALE_ARGS_URI获得，如果获取不到,使用AUTOSCALE_ARGS
@@ -243,7 +252,7 @@ if __name__ == "__main__":
             app['min_range'],
             app['max_range'],
             interval,
-            app['verbose'],
+            app['log_level'],
             api_client)
         t = threading.Thread(target=autoScaler.run,name=app['dcos_tenant'] + app['id'])
         t.start()
@@ -309,7 +318,7 @@ if __name__ == "__main__":
                                         app['min_range'],
                                         app['max_range'],
                                         interval,
-                                        app['verbose'],
+                                        app['log_level'],
                                         api_client)
                 t = threading.Thread(target=autoScaler.run, name=app['dcos_tenant'] + app['id'])
                 t.start()
@@ -337,7 +346,7 @@ if __name__ == "__main__":
                                         app['min_range'],
                                         app['max_range'],
                                         interval,
-                                        app['verbose'],
+                                        app['log_level'],
                                         api_client)
                 t = threading.Thread(target=autoScaler.run, name=app['dcos_tenant'] + app['id'])
                 t.start()
