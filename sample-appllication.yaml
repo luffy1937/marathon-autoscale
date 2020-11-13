@@ -1,0 +1,15 @@
+dcos_master: http://leader.mesos
+internal: 20
+log_level: INFO
+alarm_api:
+  host: marathon-lb-skyark.sae-skyark.dcos.2i.unicom.local
+  uri: /mser/business/monitor/alarm
+  params:
+    globalKey: 'starship'
+    alarmLevel: 'P0'
+    area: '亦庄测试'
+    cluster: '亦庄测试'
+    dingAlarm: True
+    project: '星舟自动扩缩'
+    type: 'auto_scale'
+scale_api_url: http://marathon-lb-skyark.sae-skyark.dcos.2i.unicom.locall/mser/scale/configs/effective

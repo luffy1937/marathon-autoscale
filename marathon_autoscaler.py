@@ -1,259 +1,128 @@
 import logging
-import os
 import json
-import sys
+import os
 import time
-import math
 import urllib3
 import threading
 import requests
 import socket
-from autoscaler.agent_stats import AgentStats
 from autoscaler.api_client import APIClient
-from autoscaler.app import MarathonApp
-from autoscaler.modes.scalemem import ScaleByMemory
 from logging.handlers import RotatingFileHandler
+from autoscaler.autoscaler import Autoscaler
+from autoscaler import autoscaler
+from autoscaler.http_handler import MyHttpHandler, AlarmFilter
 
-ARGS_FROM_URI = os.environ.get('AUTOSCALE_ARGS_URI')
-ARGS_FROM_ENV = os.environ.get('AUTOSCALE_ARGS')
-DCOS_MASTER = os.environ.get('DCOS_MASTER')
-INTERVAL = int(os.environ.get('INTERVAL'))
-LOG_LEVEL = os.environ.get("LOG_LEVEL")
 
-# Dictionary defines the different scaling modes available to autoscaler
-MODES = {
-    'mem': ScaleByMemory
-}
-
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 LOGGING_FORMAT = '%(asctime)s - %(threadName)s - %(thread)s - %(pathname)s:%(lineno)d - %(levelname)s - %(message)s'
 
-class Autoscaler:
-    """Marathon autoscaler upon initialization, it reads a list of
-    command line parameters or env variables. Then it logs in to DCOS
-    and starts querying metrics relevant to the scaling objective
-    (cpu, mem, sqs, and, or). Scaling can happen by cpu, mem,
-    or sqs. The checks are performed on a configurable interval.
-    """
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-    MARATHON_APPS_URI = '/service/marathon/v2/apps'
-
-    def __init__(self, dcos_tenant, marathon_app, trigger_mode, autoscale_multiplier, min_instances, max_instances, cool_down_factor
-                 , scale_up_factor, min_range, max_range, interval, log_level, api_client):
-        self.scale_up = 0
-        self.cool_down = 0
-        self.trigger_mode = trigger_mode
-        self.autoscale_multiplier = float(autoscale_multiplier)
-        self.min_instances = int(min_instances)
-        self.max_instances = int(max_instances)
-        self.cool_down_factor = int(cool_down_factor)
-        self.scale_up_factor = int(scale_up_factor)
-        self.interval = interval
-        self.log_level = log_level
-        self.MARATHON_APPS_URI = self.MARATHON_APPS_URI.replace('marathon', dcos_tenant)
-        #多线程时的终止条件
-        self.active = True
-
-        # Start logging
-        self.log = logging.getLogger(dcos_tenant + marathon_app)
-        if self.log_level == 'DEBUG':
-            self.log.setLevel(logging.DEBUG)
-        else:
-            self.log.setLevel(logging.INFO)
-
-        # Initialize marathon client for auth requests
-        self.api_client = api_client
-
-        # Initialize agent statistics fetcher and keeper
-        self.agent_stats = AgentStats(self.api_client)
-
-        # Instantiate the Marathon app class
-        app_name = marathon_app
-        if not app_name.startswith('/'):
-            app_name = '/' + app_name
-        self.marathon_app = MarathonApp(
-            app_name=app_name,
-            api_client=self.api_client,
-            dcos_tenant=dcos_tenant
-        )
-
-        # Instantiate the scaling mode class
-        min = [float(i) for i in min_range]
-        max = [float(i) for i in max_range]
-
-        dimension = {"min": min, "max": max}
-
-        self.scaling_mode = MODES[self.trigger_mode](
-            api_client=self.api_client,
-            agent_stats=self.agent_stats,
-            app=self.marathon_app,
-            dimension=dimension,
-        )
-    def terminal(self):
-        self.active = False
-    def timer(self):
-        """Simple timer function"""
-        self.log.debug("Successfully completed a cycle, sleeping for %s seconds",
-                       self.interval)
-        time.sleep(self.interval)
-
-    def autoscale(self, direction):
-        """ Determine if scaling mode direction is below or above scaling
-        factor. If scale_up/cool_down cycle count exceeds scaling
-        factor, autoscale (up/down) will be triggered.
-        """
-
-        if direction == 1:
-            self.scale_up += 1
-            self.cool_down = 0
-            if self.scale_up >= self.scale_up_factor:
-                self.log.warning("Auto-scale triggered based on %s exceeding threshold" % self.trigger_mode)
-                self.scale_app(True)
-                self.scale_up = 0
-            else:
-                self.log.info("%s above thresholds, but waiting to exceed scale-up factor. "
-                              "Consecutive cycles = %s, Scale-up factor = %s" %
-                              (self.trigger_mode, self.scale_up, self.scale_up_factor))
-        elif direction == -1:
-            self.cool_down += 1
-            self.scale_up = 0
-            if self.cool_down >= self.cool_down_factor:
-                self.log.warning("Auto-scale triggered based on %s below the threshold" % self.trigger_mode)
-                self.scale_app(False)
-                self.cool_down = 0
-            else:
-                self.log.info("%s below thresholds, but waiting to exceed cool-down factor. "
-                              "Consecutive cycles = %s, Cool-down factor = %s" %
-                              (self.trigger_mode, self.cool_down, self.cool_down_factor))
-        else:
-            self.log.info("%s within thresholds" % self.trigger_mode)
-            self.scale_up = 0
-            self.cool_down = 0
-
-    def scale_app(self, is_up):
-        """Scale marathon_app up or down
-        Args:
-            is_up(bool): Scale up if True, scale down if False
-        """
-        # get the number of instances running
-        app_instances = self.marathon_app.get_app_instances()
-
-        if is_up:
-            target_instances = math.ceil(app_instances * self.autoscale_multiplier)
-            if target_instances > self.max_instances:
-                self.log.warning("Reached the set maximum of instances %s", self.max_instances)
-                target_instances = self.max_instances
-        else:
-            # target_instances = math.floor(app_instances / self.autoscale_multiplier)
-            # if target_instances < self.min_instances:
-            #     self.log.info("Reached the set minimum of instances %s", self.min_instances)
-            #     target_instances = self.min_instances
-            #缩容动作动作不执行，日志告警
-            target_instances = app_instances
-            self.log.warning('scale down trigger off')
-
-        self.log.debug("scale_app: app_instances %s target_instances %s",
-                       app_instances, target_instances)
-
-        if app_instances != target_instances:
-            data = {'instances': target_instances}
-            json_data = json.dumps(data)
-            response = self.api_client.dcos_rest(
-                "put",
-                self.MARATHON_APPS_URI + self.marathon_app.app_name,
-                data=json_data
-            )
-            self.log.debug("scale_app response: %s", response)
-
-    def run(self):
-        """Main function
-        """
-        self.cool_down = 0
-        self.scale_up = 0
-
-        while True:
-            if self.active is not True:
-                self.log.info("termination")
-                return
-            try:
-                self.agent_stats.reset()
-
-                # Test for apps existence in Marathon
-                if not self.marathon_app.app_exists():
-                    self.log.error("Could not find %s in list of apps.",
-                                   self.marathon_app.app_name)
-                    continue
-
-                # Get the mode scaling direction
-                direction = self.scaling_mode.scale_direction()
-                self.log.debug("scaling mode direction = %s", direction)
-
-                # Evaluate whether to auto-scale
-                self.autoscale(direction)
-
-            except Exception as e:
-                self.log.exception(e)
-            finally:
-                self.timer()
+JSON_CONFIG_URL = os.environ.get('JSON_CONFIG_URL')
 
 #判断是否支持mode
-supportMode = lambda app: False if MODES.get(app['trigger_mode'], None) is None else True
+supportMode = lambda app: False if autoscaler.MODES.get(app['trigger_mode'], None) is None else True
 
 if __name__ == "__main__":
+    #从配置中心加载配置
+    #配置格式
+    '''
+    dcos_master: http://leader.mesos
+    internal: 20
+    log_level: INFO
+    alarm_api:
+      host: marathon-lb-skyark.sae-skyark.dcos.2i.unicom.local
+      url: /mser/business/monitor/alarm
+      params:
+        globalKey: 'starship'
+        alarmLevel: 'P0'
+        area: '亦庄测试'
+        cluster: '亦庄测试'
+        dingAlarm: True
+        project: '星舟自动扩缩'
+        type: 'auto_scale'
+        key: 'starship'
+    scale_api_url: http://marathon-lb-skyark.sae-skyark.dcos.2i.unicom.locall/mser/scale/configs/effective
+    '''
+    response = requests.get(JSON_CONFIG_URL)
+    if response.status_code != 200:
+        raise SystemError('获取配置失败')
+    config = json.loads(response.content)
+    dcos_master = config['dcos_master']
+    interval = config['internal']
+    #log_level = config['log_level']
+    alarm_host = config['alarm_api']['host']
+    alarm_url = config['alarm_api']['url']
+    scale_api_url = config['scale_api_url']
+
+    #填充告警接口报文
+    autoscaler.ALARM_API_BODY_GLOBALKEY = config['alarm_api'].get('globalKey')
+    autoscaler.ALARM_API_BODY['body']['area'] = config['alarm_api']['params']['area']
+    autoscaler.ALARM_API_BODY['body']['cluster'] = config['alarm_api']['params']['cluster']
+    autoscaler.ALARM_API_BODY['body']['dingAlarm'] = config['alarm_api']['params']['dingAlarm']
+    autoscaler.ALARM_API_BODY['body']['project'] = config['alarm_api']['params']['project']
+    autoscaler.ALARM_API_BODY['body']['type'] = config['alarm_api']['params']['type']
+    autoscaler.ALARM_API_BODY['body']['alarmLevel'] = config['alarm_api']['params']['alarmLevel']
+    autoscaler.ALARM_API_BODY['body']['key'] = config['alarm_api']['params']['key']
+
+    #root日志设置
     logging.basicConfig(
         format=LOGGING_FORMAT,
         level=logging.INFO
     )
-    rh = RotatingFileHandler('marathon-autoscale-info-' + socket.gethostname() + '.log', maxBytes=1024 * 1024 * 100, backupCount=10)
+    rootlog = logging.getLogger()
+    #info级别及以上日志，输出到info文件
+    rh = RotatingFileHandler('marathon-autoscale-info-' + socket.gethostname() + '.log', maxBytes=1024 * 1024 * 100, backupCount=10, encoding='u8')
     rh.setLevel(level=logging.INFO)
     rh.setFormatter(logging.Formatter(LOGGING_FORMAT))
-    rhe = RotatingFileHandler('marathon-autoscale-warn-' + socket.gethostname() + '.log', maxBytes=1024 * 1024 * 100, backupCount=10)
+    rootlog.addHandler(rh)
+    #warn级别及以上日志，输出到warn文件
+    rhe = RotatingFileHandler('marathon-autoscale-warn-' + socket.gethostname() + '.log', maxBytes=1024 * 1024 * 100, backupCount=10, encoding='u8')
     rhe.setLevel(level=logging.WARN)
     rhe.setFormatter(logging.Formatter(LOGGING_FORMAT))
-    logging.getLogger().addHandler(rh)
-    logging.getLogger().addHandler(rhe)
+    rootlog.addHandler(rhe)
+    #告警类日志还需要调用alarm接口
+    httpHandler = MyHttpHandler(alarm_host, alarm_url, method="POST")
+    httpHandler.addFilter(AlarmFilter())
+    httpHandler.setLevel(level=logging.WARN)
+    rootlog.addHandler(httpHandler)
+
     log = logging.getLogger('autoscale')
 
-    #获取参数,优先通过请求AUTOSCALE_ARGS_URI获得，如果获取不到,使用AUTOSCALE_ARGS
+    #访问扩缩策略接口
     use_env_args = False
     argsJson = ''
-    if ARGS_FROM_URI is not None and ARGS_FROM_URI.strip() != '':
-        response = requests.get(ARGS_FROM_URI)
-        if response.status_code != 200:
-            raise SystemError(ARGS_FROM_URI + ' is not available\n' + response.content)
-        jsonArgs = response.json()
-    else:
-        if ARGS_FROM_ENV is None or ARGS_FROM_ENV.strip() != '':
-            raise SystemError('fail to get args')
-        jsonArgs = json.loads(ARGS_FROM_ENV)
-        use_env_args = True
+    response = requests.get(scale_api_url)
+    if response.status_code != 200:
+        raise SystemError(scale_api_url + ' is not available\n' + response.content)
+    jsonArgs = response.json()
     #每个app对应一个autoscaler,并运行在单独的线程中
-    api_client = APIClient(DCOS_MASTER)
+    api_client = APIClient(dcos_master)
     current_marathon_apps = list(filter(supportMode, jsonArgs['data']['marathon_apps']))
     #map的key为app['dcos_tenant'] + app['id']
     threadsMap = {}
     autoScalerMap = {}
     for app in current_marathon_apps:
         autoScaler = Autoscaler(app['dcos_tenant'],
-            app['id'],
-            app['trigger_mode'],
-            app['autoscale_multiplier'],
-            app['min_instances'],
-            app['max_instances'],
-            app['cool_down_factor'],
-            app['scale_up_factor'],
-            app['min_range'],
-            app['max_range'],
-            INTERVAL,
-            app['log_level'],
-            api_client)
+                                app['id'],
+                                app['trigger_mode'],
+                                app['autoscale_multiplier'],
+                                app['min_instances'],
+                                app['max_instances'],
+                                app['cool_down_factor'],
+                                app['scale_up_factor'],
+                                app['min_range'],
+                                app['max_range'],
+                                interval,
+                                app['log_level'],
+                                api_client,
+                                app['alarm_key'])
         t = threading.Thread(target=autoScaler.run,name=app['dcos_tenant'] + app['id'])
         t.start()
         threadsMap[t.getName()] = t
         autoScalerMap[t.getName()] = autoScaler
-    #清理缓存
+    #定时任务：1.清空api_client.dcos_rest_get()缓存；2.动态更新扩缩策略
     while True:
-        time.sleep(INTERVAL)
+        time.sleep(interval)
         #清空api_client.dcos_rest_get()的缓存
         log.info(' '.join(['current cache_info:', str(api_client.dcos_rest_get.cache_info()), '\n cache cleared']))
         api_client.dcos_rest_get.cache_clear()
@@ -262,7 +131,7 @@ if __name__ == "__main__":
         if use_env_args: continue
         #访问服务扩缩信息全量查询接口，更新autoscale
         log.info('Polling Update Autoscaler Threads Begin')
-        response = requests.get(ARGS_FROM_URI)
+        response = requests.get(scale_api_url)
         if response.status_code != 200:
             log.error("request for autoscale api error:" + response.content)
             continue
@@ -313,9 +182,10 @@ if __name__ == "__main__":
                                         app['scale_up_factor'],
                                         app['min_range'],
                                         app['max_range'],
-                                        INTERVAL,
+                                        interval,
                                         app['log_level'],
-                                        api_client)
+                                        api_client,
+                                        app['alarm_key'])
                 t = threading.Thread(target=autoScaler.run, name=app['dcos_tenant'] + app['id'])
                 t.start()
                 autoScalerMap[t.getName()] = autoScaler
@@ -341,9 +211,10 @@ if __name__ == "__main__":
                                         app['scale_up_factor'],
                                         app['min_range'],
                                         app['max_range'],
-                                        INTERVAL,
+                                        interval,
                                         app['log_level'],
-                                        api_client)
+                                        api_client,
+                                        app['alarm_key'])
                 t = threading.Thread(target=autoScaler.run, name=app['dcos_tenant'] + app['id'])
                 t.start()
                 threadsMap[t.getName()] = t
