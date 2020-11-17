@@ -10,6 +10,10 @@ WORKDIR /marathon-autoscale
 
 RUN apk add --update --virtual .build-dependencies openssl-dev libffi-dev make gcc g++
 RUN apk add --virtual python-dev
+RUN apk add tzdata \
+  && cp /usr/share/zoneinfo/Asia/Shanghai /etc/localtime \
+  && apk del tzdata \
+  && rm -rf /var/cache/apk/*
 
 RUN pip install -r requirements.txt
 
