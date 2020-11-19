@@ -65,6 +65,8 @@ class Autoscaler:
         self.alarm_key = alarm_key
         self.dcos_tenant = dcos_tenant
         self.app_id = app_id
+        self.min_range = min_range
+        self.max_range = max_range
         self.MARATHON_APPS_URI = self.MARATHON_APPS_URI.replace('marathon', dcos_tenant)
         #多线程时的终止条件
         self.active = True
@@ -153,8 +155,9 @@ class Autoscaler:
         msg['body']['detail'] = detail
         msg['body']['source'] = self.dcos_tenant + self.app_id
         msg['body']['startTime'] = datetime.datetime.now().isoformat()
-        msg['body']['threshold'] = self.trigger_mode
-        self.log.warning(json.dumps(msg))
+        msg['body']['threshold'] = '扩缩策略:{},扩容阈值:{}%,缩容阈值:{}%,最小实例数:{},最大实例数:{}'\
+            .format(self.trigger_mode, str(self.max_range), str(self.min_range), str(self.min_instances), str(self.max_instances))
+        self.log.warning(json.dumps(msg,ensure_ascii=False))
     def scale_app(self, is_up):
         """Scale marathon_app up or down
         Args:
@@ -168,7 +171,10 @@ class Autoscaler:
             if target_instances > self.max_instances:
                 self.log.warning("Reached the set maximum of instances %s", self.max_instances)
                 target_instances = self.max_instances
-            detail = "当前实例数为{}，最大实例数为{}，将扩容至实例数{}".format(app_instances, self.max_instances, target_instances)
+            if target_instances > app_instances:
+                detail = "当前实例数为{}，将扩容至实例数{}".format(app_instances, target_instances)
+            else:
+                detail = "当前实例数为{}，已达到最大实例数".format(app_instances)
             self.alarm(detail)
         else:
             # target_instances = math.floor(app_instances / self.autoscale_multiplier)
