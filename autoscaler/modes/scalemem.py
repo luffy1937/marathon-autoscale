@@ -5,7 +5,7 @@ class ScaleByMemory(AbstractMode):
 
     def __init__(self, api_client=None, agent_stats=None, prometheus_host= None, app=None,
                  dimension=None):
-        super().__init__(api_client, agent_stats, app, dimension)
+        super().__init__(api_client=api_client, agent_stats=agent_stats, app=app, dimension=dimension)
 
     def get_value(self):
 
