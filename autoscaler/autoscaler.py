@@ -14,6 +14,7 @@ import math
 import datetime
 from autoscaler.agent_stats import AgentStats
 from autoscaler.app import MarathonApp
+from autoscaler.modes.scalebyjvm import ScaleByJvm
 from autoscaler.modes.scalemem import ScaleByMemory
 ALARM_API_BODY = {
         'request_params':{
@@ -37,7 +38,8 @@ ALARM_API_BODY = {
 ALARM_API_BODY_GLOBALKEY = None
 # Dictionary defines the different scaling modes available to autoscaler
 MODES = {
-    'mem': ScaleByMemory
+    'mem': ScaleByMemory,
+    'jvm': ScaleByJvm
 }
 
 class Autoscaler:
@@ -49,8 +51,9 @@ class Autoscaler:
     """
 
     MARATHON_APPS_URI = '/service/marathon/v2/apps'
+    PROMETHEUS_QUERY_URI = '/api/v1/query'
 
-    def __init__(self, dcos_tenant, app_id, trigger_mode, autoscale_multiplier, min_instances, max_instances, cool_down_factor
+    def __init__(self, dcos_tenant, prometheus_host, app_id, trigger_mode, autoscale_multiplier, min_instances, max_instances, cool_down_factor
                  , scale_up_factor, min_range, max_range, interval, log_level, api_client, alarm_key):
         self.scale_up = 0
         self.cool_down = 0
@@ -64,6 +67,7 @@ class Autoscaler:
         self.log_level = log_level
         self.alarm_key = alarm_key
         self.dcos_tenant = dcos_tenant
+        self.prometheus_host = prometheus_host
         self.app_id = app_id
         self.min_range = min_range
         self.max_range = max_range
@@ -89,7 +93,7 @@ class Autoscaler:
         if not app_id.startswith('/'):
             app_id = '/' + app_id
         self.marathon_app = MarathonApp(
-            app_name=app_id,
+            app_id=app_id,
             api_client=self.api_client,
             dcos_tenant=self.dcos_tenant
         )
@@ -103,6 +107,7 @@ class Autoscaler:
         self.scaling_mode = MODES[self.trigger_mode](
             api_client=self.api_client,
             agent_stats=self.agent_stats,
+            prometheus_host = self.prometheus_host,
             app=self.marathon_app,
             dimension=dimension,
         )
@@ -193,7 +198,7 @@ class Autoscaler:
             json_data = json.dumps(data)
             response = self.api_client.dcos_rest(
                 "put",
-                self.MARATHON_APPS_URI + self.marathon_app.app_name,
+                self.MARATHON_APPS_URI + self.marathon_app.app_id,
                 data=json_data
             )
             self.log.debug("scale_app response: %s", response)
@@ -214,7 +219,7 @@ class Autoscaler:
                 # Test for apps existence in Marathon
                 if not self.marathon_app.app_exists():
                     self.log.error("Could not find %s in list of apps.",
-                                   self.marathon_app.app_name)
+                                   self.marathon_app.app_id)
                     continue
 
                 # Get the mode scaling direction

@@ -4,7 +4,7 @@ import threading
 
 class AbstractMode(ABC):
 
-    def __init__(self, api_client=None, agent_stats=None, app=None,
+    def __init__(self, api_client=None, agent_stats=None, prometheus_host=None, app=None,
                  dimension=None):
 
         super().__init__()
@@ -14,7 +14,7 @@ class AbstractMode(ABC):
         self.app = app
         self.min_range = 0.0
         self.max_range = 100.0
-
+        self.prometheus_host = prometheus_host
         if dimension is not None:
             if isinstance(dimension["min"], list):
                 self.min_range = dimension["min"][0]

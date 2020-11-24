@@ -7,26 +7,30 @@ class MarathonApp:
 
     MARATHON_APPS_URI = '/service/marathon/v2/apps'
 
-    def __init__(self, app_name, api_client, dcos_tenant):
+    def __init__(self, app_id, api_client, dcos_tenant):
         '''
         支持多租户
-        :param app_name:
+        :param app_id:
         :param api_client:
         :param dcos_tenant: 租户
         '''
-        self.app_name = app_name
+        self.app_id = app_id
         self.api_client = api_client
         self.log = logging.getLogger('autoscale')
         self.MARATHON_APPS_URI = self.MARATHON_APPS_URI.replace('marathon', dcos_tenant)
+        #app_name不同于app_id
+        self.app_name = None
     def app_exists(self):
         """Determines if the application exists in Marathon
         """
         try:
             response = self.api_client.dcos_rest(
                 "get",
-                self.MARATHON_APPS_URI + self.app_name
+                self.MARATHON_APPS_URI + self.app_id
             )
-            return self.app_name == response['app']['id']
+            if(None != response['app'].get('env') and None != response['app'].get('env').get('APP_NAME')):
+                self.app_name = response['app'].get('env').get('APP_NAME')
+            return self.app_id == response['app']['id']
         except requests.exceptions.HTTPError as e:
             if e.response is not None:
                 if e.response.status_code != 404:
@@ -40,15 +44,16 @@ class MarathonApp:
 
         response = self.api_client.dcos_rest(
             "get",
-            self.MARATHON_APPS_URI + self.app_name
+            self.MARATHON_APPS_URI + self.app_id
         )
 
         try:
             app_instances = response['app']['instances']
             self.log.debug("Marathon app %s has %s deployed instances",
-                           self.app_name, app_instances)
+                           self.app_id, app_instances)
         except KeyError:
-            self.log.error('No task data in marathon for app %s', self.app_name)
+            self.log.error('No task data in marathon for app %s', self.app_id)
+
 
         return app_instances
 
@@ -61,7 +66,7 @@ class MarathonApp:
 
         response = self.api_client.dcos_rest(
             "get",
-            self.MARATHON_APPS_URI + self.app_name
+            self.MARATHON_APPS_URI + self.app_id
         )
 
         try:
@@ -73,6 +78,6 @@ class MarathonApp:
                                taskid, hostid, slave_id)
                 app_task_dict[str(taskid)] = str(slave_id)
         except KeyError:
-            self.log.error('No task data in marathon for app %s', self.app_name)
+            self.log.error('No task data in marathon for app %s', self.app_id)
 
         return app_task_dict

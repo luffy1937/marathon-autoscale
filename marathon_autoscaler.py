@@ -27,6 +27,7 @@ if __name__ == "__main__":
     #配置格式
     '''
     dcos_master: http://leader.mesos
+    prometheus_host: http://1.1.1.1:8888
     internal: 20
     log_level: INFO
     alarm_api:
@@ -48,6 +49,7 @@ if __name__ == "__main__":
         raise SystemError('获取配置失败')
     config = json.loads(response.content)
     dcos_master = config['dcos_master']
+    prometheus_host = config['prometheus_host']
     interval = config['internal']
     #log_level = config['log_level']
     alarm_host = config['alarm_api']['host']
@@ -99,10 +101,11 @@ if __name__ == "__main__":
     api_client = APIClient(dcos_master)
     current_marathon_apps = list(filter(supportMode, jsonArgs['data']['marathon_apps']))
     #map的key为app['dcos_tenant'] + app['id']
-    threadsMap = {}
+    #threadsMap = {}
     autoScalerMap = {}
     for app in current_marathon_apps:
         autoScaler = Autoscaler(app['dcos_tenant'],
+                                prometheus_host,
                                 app['id'],
                                 app['trigger_mode'],
                                 app['autoscale_multiplier'],
@@ -118,106 +121,103 @@ if __name__ == "__main__":
                                 app['alarm_key'])
         t = threading.Thread(target=autoScaler.run,name=app['dcos_tenant'] + app['id'])
         t.start()
-        threadsMap[t.getName()] = t
+        #threadsMap[t.getName()] = t
         autoScalerMap[t.getName()] = autoScaler
     #定时任务：1.清空api_client.dcos_rest_get()缓存；2.动态更新扩缩策略
     while True:
-        time.sleep(interval)
-        #清空api_client.dcos_rest_get()的缓存
-        log.info(' '.join(['current cache_info:', str(api_client.dcos_rest_get.cache_info()), '\n cache cleared']))
-        api_client.dcos_rest_get.cache_clear()
+        try:
 
-        #如果是env_args方式，则不执行以下逻辑
-        if use_env_args: continue
-        #访问服务扩缩信息全量查询接口，更新autoscale
-        log.info('Polling Update Autoscaler Threads Begin')
-        response = requests.get(scale_api_url)
-        if response.status_code != 200:
-            log.error("request for autoscale api error:" + response.content)
-            continue
-        else:
-            #当前app key set
-            currentAppsMap = {}
-            for app in current_marathon_apps:
-                currentAppsMap[app['dcos_tenant'] + app['id']] = app
+            time.sleep(interval)
+            #清空api_client.dcos_rest_get()的缓存
+            log.info(' '.join(['current cache_info:', str(api_client.dcos_rest_get.cache_info()), '\n cache cleared']))
+            api_client.dcos_rest_get.cache_clear()
 
-            currentAppKeySet = set(currentAppsMap.keys())
-            #接口返回app信息
-            try:
-                expectedApps = list(filter(supportMode, response.json()['data']['marathon_apps']))
-            except Exception as e:
-                log.exception(e)
+            #如果是env_args方式，则不执行以下逻辑
+            if use_env_args: continue
+            #访问服务扩缩信息全量查询接口，更新autoscale
+            log.info('Polling Update Autoscaler Threads Begin')
+            response = requests.get(scale_api_url)
+            if response.status_code != 200:
+                log.error("request for autoscale api error:" + response.content)
                 continue
-            expectedAppsMap = {}
-            for app in expectedApps:
-                expectedAppsMap[app['dcos_tenant'] + app['id']] = app
-            #接口返回的app key set
-            expectedAppKeySet = set(expectedAppsMap.keys())
-            #新增key
-            newAppKeySet = expectedAppKeySet - currentAppKeySet
-            log.info('new app:' + str(newAppKeySet))
-            #移除的key
-            removedKeySet = currentAppKeySet - expectedAppKeySet
-            log.info('removed app:' + str(removedKeySet))
-            #保留的key
-            reservedAppKeySet = expectedAppKeySet & currentAppKeySet
-            #保留key中，value有更新的key
-            modifiedKeySet = set()
-            for key in reservedAppKeySet:
-                if currentAppsMap.get(key) != expectedAppsMap.get(key):
-                    modifiedKeySet.add(key)
-                    log.info('app:{} modified from: \n{}\nto:\n{}'.format(key, str(currentAppsMap.get(key)), str(expectedAppsMap.get(key))))
-            log.info('modified app:' + str(modifiedKeySet))
+            else:
+                #当前app key set
+                currentAppsMap = {app['dcos_tenant'] + app['id']:app for app in current_marathon_apps}
+                currentAppKeySet = set(currentAppsMap.keys())
+                #接口返回app信息
+                expectedApps = list(filter(supportMode, response.json()['data']['marathon_apps']))
+                expectedAppsMap = {app['dcos_tenant'] + app['id']:app for app in expectedApps}
+                #接口返回的app key set
+                expectedAppKeySet = set(expectedAppsMap.keys())
+                #新增key
+                newAppKeySet = expectedAppKeySet - currentAppKeySet
+                log.info('new app:' + str(newAppKeySet))
+                #移除的key
+                removedKeySet = currentAppKeySet - expectedAppKeySet
+                log.info('removed app:' + str(removedKeySet))
+                #保留的key
+                reservedAppKeySet = expectedAppKeySet & currentAppKeySet
+                #保留key中，value有更新的key
+                modifiedKeySet = set()
+                for key in reservedAppKeySet:
+                    if currentAppsMap.get(key) != expectedAppsMap.get(key):
+                        modifiedKeySet.add(key)
+                        log.info('app:{} modified from: \n{}\nto:\n{}'.format(key, str(currentAppsMap.get(key)), str(expectedAppsMap.get(key))))
+                log.info('modified app:' + str(modifiedKeySet))
 
-            #新增app，根据参数创建新的autoscaler线程
-            for key in newAppKeySet:
-                app = expectedAppsMap.get(key)
-                autoScaler = Autoscaler(app['dcos_tenant'],
-                                        app['id'],
-                                        app['trigger_mode'],
-                                        app['autoscale_multiplier'],
-                                        app['min_instances'],
-                                        app['max_instances'],
-                                        app['cool_down_factor'],
-                                        app['scale_up_factor'],
-                                        app['min_range'],
-                                        app['max_range'],
-                                        interval,
-                                        app['log_level'],
-                                        api_client,
-                                        app['alarm_key'])
-                t = threading.Thread(target=autoScaler.run, name=app['dcos_tenant'] + app['id'])
-                t.start()
-                autoScalerMap[t.getName()] = autoScaler
-                threadsMap[t.getName()] = t
-            #移除app，调用autoscaler的ternimal方法，让线程终止
-            for key in removedKeySet:
-                autoScalerMap.get(key).terminal()
-                autoScalerMap.pop(key)
-                threadsMap.pop(key)
-            #修改app,先移除app,再根据新参数创建autoscaler线程
-            for key in modifiedKeySet:
-                autoScalerMap.get(key).terminal()
-                autoScalerMap.pop(key)
-                threadsMap.pop(key)
-                app = expectedAppsMap.get(key)
-                autoScaler = Autoscaler(app['dcos_tenant'],
-                                        app['id'],
-                                        app['trigger_mode'],
-                                        app['autoscale_multiplier'],
-                                        app['min_instances'],
-                                        app['max_instances'],
-                                        app['cool_down_factor'],
-                                        app['scale_up_factor'],
-                                        app['min_range'],
-                                        app['max_range'],
-                                        interval,
-                                        app['log_level'],
-                                        api_client,
-                                        app['alarm_key'])
-                t = threading.Thread(target=autoScaler.run, name=app['dcos_tenant'] + app['id'])
-                t.start()
-                threadsMap[t.getName()] = t
-                autoScalerMap[t.getName()] = autoScaler
-            current_marathon_apps = expectedApps
-            log.info('Polling Update Autoscaler Threads End')
+                #新增app，根据参数创建新的autoscaler线程
+                for key in newAppKeySet:
+                    app = expectedAppsMap.get(key)
+                    autoScaler = Autoscaler(app['dcos_tenant'],
+                                            prometheus_host,
+                                            app['id'],
+                                            app['trigger_mode'],
+                                            app['autoscale_multiplier'],
+                                            app['min_instances'],
+                                            app['max_instances'],
+                                            app['cool_down_factor'],
+                                            app['scale_up_factor'],
+                                            app['min_range'],
+                                            app['max_range'],
+                                            interval,
+                                            app['log_level'],
+                                            api_client,
+                                            app['alarm_key'])
+                    t = threading.Thread(target=autoScaler.run, name=app['dcos_tenant'] + app['id'])
+                    t.start()
+                    autoScalerMap[t.getName()] = autoScaler
+                    #threadsMap[t.getName()] = t
+                #移除app，调用autoscaler的ternimal方法，让线程终止
+                for key in removedKeySet:
+                    autoScalerMap.get(key).terminal()
+                    autoScalerMap.pop(key)
+                    #threadsMap.pop(key)
+                #修改app,先移除app,再根据新参数创建autoscaler线程
+                for key in modifiedKeySet:
+                    autoScalerMap.get(key).terminal()
+                    autoScalerMap.pop(key)
+                    #threadsMap.pop(key)
+                    app = expectedAppsMap.get(key)
+                    autoScaler = Autoscaler(app['dcos_tenant'],
+                                            prometheus_host,
+                                            app['id'],
+                                            app['trigger_mode'],
+                                            app['autoscale_multiplier'],
+                                            app['min_instances'],
+                                            app['max_instances'],
+                                            app['cool_down_factor'],
+                                            app['scale_up_factor'],
+                                            app['min_range'],
+                                            app['max_range'],
+                                            interval,
+                                            app['log_level'],
+                                            api_client,
+                                            app['alarm_key'])
+                    t = threading.Thread(target=autoScaler.run, name=app['dcos_tenant'] + app['id'])
+                    t.start()
+                    #threadsMap[t.getName()] = t
+                    autoScalerMap[t.getName()] = autoScaler
+                current_marathon_apps = expectedApps
+                log.info('Polling Update Autoscaler Threads End')
+        except Exception as e:
+            log.exception(e)
