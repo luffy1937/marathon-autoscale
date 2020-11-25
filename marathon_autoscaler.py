@@ -91,7 +91,6 @@ if __name__ == "__main__":
     log = logging.getLogger('autoscale')
 
     #访问扩缩策略接口
-    use_env_args = False
     argsJson = ''
     response = requests.get(scale_api_url)
     if response.status_code != 200:
@@ -131,9 +130,6 @@ if __name__ == "__main__":
             #清空api_client.dcos_rest_get()的缓存
             log.info(' '.join(['current cache_info:', str(api_client.dcos_rest_get.cache_info()), '\n cache cleared']))
             api_client.dcos_rest_get.cache_clear()
-
-            #如果是env_args方式，则不执行以下逻辑
-            if use_env_args: continue
             #访问服务扩缩信息全量查询接口，更新autoscale
             log.info('Polling Update Autoscaler Threads Begin')
             response = requests.get(scale_api_url)

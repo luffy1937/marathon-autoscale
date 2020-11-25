@@ -17,7 +17,7 @@ class MarathonApp:
         self.app_id = app_id
         self.api_client = api_client
         self.log = logging.getLogger('autoscale')
-        self.MARATHON_APPS_URI = self.MARATHON_APPS_URI.replace('marathon', dcos_tenant)
+        self.marathon_apps_uri = MarathonApp.MARATHON_APPS_URI.replace('marathon', dcos_tenant)
         #app_name不同于app_id
         self.app_name = None
     def app_exists(self):
@@ -26,7 +26,7 @@ class MarathonApp:
         try:
             response = self.api_client.dcos_rest(
                 "get",
-                self.MARATHON_APPS_URI + self.app_id
+                self.marathon_apps_uri + self.app_id
             )
             if(None != response['app'].get('env') and None != response['app'].get('env').get('APP_NAME')):
                 self.app_name = response['app'].get('env').get('APP_NAME')
@@ -44,7 +44,7 @@ class MarathonApp:
 
         response = self.api_client.dcos_rest(
             "get",
-            self.MARATHON_APPS_URI + self.app_id
+            self.marathon_apps_uri + self.app_id
         )
 
         try:
@@ -66,7 +66,7 @@ class MarathonApp:
 
         response = self.api_client.dcos_rest(
             "get",
-            self.MARATHON_APPS_URI + self.app_id
+            self.marathon_apps_uri + self.app_id
         )
 
         try:

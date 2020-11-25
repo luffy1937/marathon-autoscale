@@ -71,7 +71,7 @@ class Autoscaler:
         self.app_id = app_id
         self.min_range = min_range
         self.max_range = max_range
-        self.MARATHON_APPS_URI = self.MARATHON_APPS_URI.replace('marathon', dcos_tenant)
+        self.marathon_apps_uri = Autoscaler.MARATHON_APPS_URI.replace('marathon', dcos_tenant)
         #多线程时的终止条件
         self.active = True
 
@@ -198,7 +198,7 @@ class Autoscaler:
             json_data = json.dumps(data)
             response = self.api_client.dcos_rest(
                 "put",
-                self.MARATHON_APPS_URI + self.marathon_app.app_id,
+                self.marathon_apps_uri + self.marathon_app.app_id,
                 data=json_data
             )
             self.log.debug("scale_app response: %s", response)
@@ -209,10 +209,7 @@ class Autoscaler:
         self.cool_down = 0
         self.scale_up = 0
 
-        while True:
-            if self.active is not True:
-                self.log.info("termination")
-                return
+        while self.active:
             try:
                 self.agent_stats.reset()
 
@@ -233,3 +230,4 @@ class Autoscaler:
                 self.log.exception(e)
             finally:
                 self.timer()
+        self.log.info('termination')

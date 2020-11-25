@@ -13,7 +13,7 @@ class AlarmFilter(Filter):
     根据LogRecord.msg 是否包含‘alarmLevel’字符串来判断是否过滤
     '''
     def filter(self, record):
-        if len(record.msg) > 0 and record.msg.__contains__('alarmLevel'):
+        if type(record.msg) == str and record.msg.__contains__('alarmLevel'):
             return True
         return False
 
